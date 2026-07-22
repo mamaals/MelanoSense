@@ -34,11 +34,25 @@
             "imageWidth": 76
           }
         }
-      ]
+      ],
+      [
+        "expo-web-browser",
+        {
+          "experimentalLauncherActivity": false
+        }
+      ],
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "54881a16-5f3a-4bdb-b182-0a199a16cc30"
+      }
+    },
+    "owner": "ucupys-team"
   }
 }
