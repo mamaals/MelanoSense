@@ -41,7 +41,9 @@
           "experimentalLauncherActivity": false
         }
       ],
-      "expo-font"
+      "expo-font",
+      "expo-sharing",
+      "expo-mail-composer"
     ],
     "experiments": {
       "typedRoutes": true,

@@ -218,11 +218,7 @@ type InputProps = {
   value: string;
   onChangeText: (text: string) => void;
   placeholder?: string;
-  keyboardType?:
-    | 'default'
-    | 'number-pad'
-    | 'phone-pad'
-    | 'email-address';
+  keyboardType?: | 'default' | 'number-pad' | 'phone-pad' | 'email-address';
   autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
 };
 
@@ -351,6 +347,7 @@ const styles = StyleSheet.create({
   picker: {
     width: '100%',
     color: '#2A2A2A',
+    fontFamily: 'Poppins-Regular',
   },
 
   saveButton: {

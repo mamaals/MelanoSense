@@ -4,7 +4,7 @@ export type Profile = {
     phone: string | null;
     birth_date: string | null;
     gender: string | null;
-    device_token: string | null;
+    device_token: string;
     created_at: string;
     updated_at: string;
 }
