@@ -1,10 +1,11 @@
-import { StyleSheet, Text, View, ActivityIndicator } from 'react-native';
+import { StyleSheet, Text, View, ActivityIndicator, Image } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import { getCurrentUserProfile } from '../services/profileServices';
 import type { Profile } from '../types/profile';
 import { useCallback, useState } from 'react';
 import ProfileSegment from '../components/header';
 import Button from '../components/Button';
+import { QrCode } from 'lucide-react-native';
 
 type HomeState =
   | 'PROFILE_INCOMPLETE'
@@ -57,6 +58,7 @@ export default function HomePage() {
     homeState = 'DEVICE_CONNECTED';
   }
 
+
   return (
     <View style={styles.container}>
       <ProfileSegment name={profile?.full_name ?? 'User'}/>
@@ -92,7 +94,10 @@ export default function HomePage() {
             </Text>
 
             <View style={styles.qrPlaceholder}>
-              <Text>QR</Text>
+                <QrCode
+                  value={profile.device_token}
+                  size={220}
+                />
             </View>
           </View>
         )}
