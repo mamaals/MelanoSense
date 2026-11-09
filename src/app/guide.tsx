@@ -34,14 +34,13 @@ export default function GuidePage() {
 
         <View style={styles.instructions}>
           <InstructionItem number={1}>
-            Sambungkan alat dengan aplikasi dengan melakukan scan QR dari alat
-            ke aplikasi atau masukkan kode alat ke dalam aplikasi pada halaman
-            scan.
+            Lengkapi profil, lalu buka menu Scan di aplikasi untuk menampilkan QR
+            pairing akun Anda. Raspberry Pi membaca QR yang ditampilkan di layar mobile.
           </InstructionItem>
 
           <InstructionItem number={2}>
-            Setelah alat terhubung, scan lesi dengan cara mengeklik tombol yang
-            berada pada alat.
+            Setelah pairing, tekan Mulai Pemeriksaan di aplikasi untuk membuka
+            layar menunggu hasil. Arahkan perangkat MelanoSense ke lesi.
           </InstructionItem>
 
           <Image
@@ -51,12 +50,13 @@ export default function GuidePage() {
           />
 
           <InstructionItem number={3}>
-            Hasil deteksi akan muncul pada layar alat.
+            Mulai pemindaian dengan tombol fisik pemeriksaan atau tombol Enter
+            pada Raspberry Pi. Pemindaian dimulai dari perangkat tersebut.
           </InstructionItem>
 
           <InstructionItem number={4}>
-            Untuk melihat hasil analisis yang lebih detail, periksa hasil scan
-            pada aplikasi.
+            Mobile menunggu hasil pemeriksaan baru melalui Supabase. Setelah hasil
+            selesai, aplikasi otomatis membuka detail analisis ABCD dan kesimpulan.
           </InstructionItem>
 
           <InstructionItem number={5}>
@@ -80,9 +80,9 @@ const styles = StyleSheet.create({
 
   scrollContent: {
     flexGrow: 1,
-    paddingHorizontal: 42,
-    paddingTop: 54,
-    paddingBottom: 150,
+    paddingHorizontal: 24,
+    paddingTop: 24,
+    paddingBottom: 24,
   },
 
 
@@ -92,7 +92,7 @@ const styles = StyleSheet.create({
   },
 
   title: {
-    fontSize: 36,
+    fontSize: 28,
     fontFamily: 'Poppins-Medium',
     color: '#303030',
     marginBottom: 25,

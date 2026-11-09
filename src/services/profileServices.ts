@@ -1,5 +1,13 @@
-import { supabase } from "../lib/supabase";
-import { Profile } from '../types/profile';
+import { supabase } from '../lib/supabase';
+import type { Profile } from '../types/profile';
+export { isProfileComplete } from '../utils/profileValidation';
+
+export type ProfileUpdatePayload = {
+  full_name: string;
+  phone: string;
+  birth_date: string;
+  gender: string;
+};
 
 export async function getCurrentUserProfile() {
     const { data: userData, error: userError } = await supabase.auth.getUser();
@@ -20,7 +28,11 @@ export async function getCurrentUserProfile() {
         };
     }
 
-    const { data, error } = await supabase.from('profiles').select('*').eq('id', user.id).single()
+    const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
     
     return {
         profile: data as Profile | null,
@@ -28,7 +40,7 @@ export async function getCurrentUserProfile() {
     };
 }
 
-export async function updateCurrentUserProfile(payload: { full_name?: string; phone?: string; birth_date?: string; gender?: string;}) {
+export async function updateCurrentUserProfile(payload: ProfileUpdatePayload) {
     const { data:userData, error:userError } = await supabase.auth.getUser();
 
     if (userError){
@@ -47,7 +59,12 @@ export async function updateCurrentUserProfile(payload: { full_name?: string; ph
         }
     }
 
-    const {data, error} = await supabase.from('profiles').update({...payload, updated_at: new Date().toISOString(),}).eq('id',user.id).select().single();
+    const { data, error } = await supabase
+        .from('profiles')
+        .update({ ...payload, updated_at: new Date().toISOString() })
+        .eq('id', user.id)
+        .select()
+        .single();
 
     return {
         profile: data as Profile | null,

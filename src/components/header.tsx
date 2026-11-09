@@ -12,7 +12,7 @@ export default function header({ name = 'User' }: ProfileSegmentProps) {
         <UserRound size={22} color="#FFFFFF" strokeWidth={2.2} />
       </View>
 
-      <View>
+      <View style={styles.textContent}>
         <Text style={styles.greeting}>Selamat Datang,</Text>
         <Text style={styles.name}>{name}</Text>
       </View>
@@ -28,6 +28,7 @@ const styles = StyleSheet.create({
   },
 
   avatar: {
+    flexShrink: 0,
     width: 48,
     height: 48,
     borderRadius: 24,
@@ -42,6 +43,8 @@ const styles = StyleSheet.create({
     color: '#4A4A4A',
     marginBottom: 2,
   },
+
+  textContent: { flex: 1, minWidth: 0 },
 
   name: {
     fontSize: 18,

@@ -1,0 +1,40 @@
+{
+  "cli": {
+    "version": "20.4.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "base": {
+      "node": "24.15.0",
+      "pnpm": "11.23.0",
+      "corepack": false,
+      "developmentClient": false,
+      "credentialsSource": "remote",
+      "env": {
+        "EXPO_NO_DOTENV": "1",
+        "MELANOSENSE_SUPABASE_HOST": "xcwmqlixryhwdebrwaty.supabase.co"
+      },
+      "android": {
+        "image": "ubuntu-26.04-jdk-17-ndk-r27b-sdk-57"
+      }
+    },
+    "preview": {
+      "extends": "base",
+      "environment": "preview",
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk",
+        "autoIncrement": false
+      }
+    },
+    "production": {
+      "extends": "base",
+      "environment": "production",
+      "distribution": "store",
+      "android": {
+        "buildType": "app-bundle",
+        "autoIncrement": false
+      }
+    }
+  }
+}

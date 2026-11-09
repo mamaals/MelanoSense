@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -7,23 +7,36 @@ import {
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
 } from 'react-native';
+import { Image } from 'expo-image';
 import {
   ArrowLeft,
   ChevronDown,
   ChevronUp,
   CircleAlert,
+  CircleCheck,
+  CircleHelp,
   Download,
   Mail,
 } from 'lucide-react-native';
 import { router, useLocalSearchParams } from 'expo-router';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as MailComposer from 'expo-mail-composer';
 
 import AnalysisCard from '../../components/AnalysisCard';
 import { supabase } from '../../lib/supabase';
+import {
+  getScanById,
+  getScanImageUrl,
+} from '../../services/scanServices';
+import type { ScanDetail } from '../../types/scans';
+import {
+  DATA_NOT_AVAILABLE, formatConfidence, formatDataValue,
+  formatDiagnosis, formatStatus, normalizeResultValue,
+} from '../../utils/scanFormatters';
 
 type AnalysisItem = {
   status: string;
@@ -31,6 +44,7 @@ type AnalysisItem = {
 };
 
 type ExaminationResult = {
+  imageUrl: string | null;
   analysis: {
     asymmetry: AnalysisItem;
     border: AnalysisItem;
@@ -39,54 +53,119 @@ type ExaminationResult = {
   };
 
   conclusion: {
-    label: string;
-    severity: string;
+    label: string | null;
+    severity: string | null;
     stage: string;
-    confidence: number;
+    confidence: number | null;
     recommendation: string;
   };
 };
 
-const mockResult: ExaminationResult = {
-  analysis: {
-    asymmetry: {
-      status: 'Terdeteksi',
-      description:
-        'Bentuk lesi memperlihatkan pola yang tidak simetris.',
-    },
 
-    border: {
-      status: 'Tidak beraturan',
-      description:
-        'Tepi lesi terlihat bergerigi dan kurang terdefinisi.',
-    },
+type DiagnosisTone = 'safe' | 'danger' | 'neutral';
 
-    color: {
-      status: 'Bervariasi',
-      description:
-        'Terdapat beberapa variasi warna pada area lesi.',
-    },
-
-    diameter: {
-      status: 'Signifikan',
-      description:
-        'Ukuran lesi mendekati atau melebihi batas yang perlu diperhatikan.',
-    },
-  },
-
-  conclusion: {
-    label: 'Indikasi Risiko Tinggi',
-    severity: 'Tingkat keparahan tinggi',
-    stage: 'Stadium belum dapat ditentukan',
-    confidence: 80,
-    recommendation:
-      'Disarankan melakukan pemeriksaan lanjutan bersama tenaga medis.',
-  },
+type DiagnosisVisual = {
+  title: string;
+  subtitle: string;
+  accentColor: string;
+  tone: DiagnosisTone;
 };
+
+const DIAGNOSIS_ACCENT = {
+  safe: '#2EAF62',
+  danger: '#FF5050',
+  neutral: '#D97706',
+} as const;
+
+function getDiagnosisVisual(
+  diagnosis?: string | null,
+  status?: string | null,
+): DiagnosisVisual {
+  const normalizedDiagnosis = normalizeResultValue(diagnosis);
+  const normalizedStatus = normalizeResultValue(status);
+  const isDangerous =
+    ['melanoma', 'risk_detected', 'high_risk', 'high_severity'].includes(
+      normalizedDiagnosis,
+    ) ||
+    ['risk_detected', 'high_risk', 'high_severity', 'critical'].includes(
+      normalizedStatus,
+    );
+  const isPending =
+    ['pending', 'processing', 'queued', 'unknown'].includes(
+      normalizedDiagnosis,
+    ) ||
+    ['pending', 'processing', 'queued', 'unknown'].includes(normalizedStatus);
+  const isNonMelanoma = ['non_melanoma', 'nonmelanoma'].includes(
+    normalizedDiagnosis,
+  );
+
+  let tone: DiagnosisTone = 'neutral';
+
+  if (!isPending && isDangerous) {
+    tone = 'danger';
+  } else if (!isPending && isNonMelanoma) {
+    tone = 'safe';
+  }
+
+  return {
+    title: formatDiagnosis(diagnosis),
+    subtitle: formatStatus(status),
+    accentColor: DIAGNOSIS_ACCENT[tone],
+    tone,
+  };
+}
+
+function mapAnalysisItem(value: string | null): AnalysisItem {
+  return {
+    status: formatDataValue(value),
+    description: '',
+  };
+}
+
+function mapScanToExaminationResult(
+  scan: ScanDetail,
+  imageUrl: string | null,
+): ExaminationResult {
+  return {
+    imageUrl,
+    analysis: {
+      asymmetry: mapAnalysisItem(scan.asymmetry),
+      border: mapAnalysisItem(scan.border),
+      color: mapAnalysisItem(scan.color),
+      diameter: mapAnalysisItem(scan.diameter),
+    },
+    conclusion: {
+      label: scan.diagnosis,
+      severity: scan.status,
+      stage: formatDataValue(scan.stage),
+      confidence: scan.confidence,
+      recommendation: formatDataValue(scan.recommendation),
+    },
+  };
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error &&
+    typeof error.message === 'string'
+  ) {
+    return error.message;
+  }
+
+  return 'Hasil pemeriksaan gagal dimuat.';
+}
 
 type BusyAction = 'download' | 'email' | null;
 
 export default function HistoryDetailPage() {
+  const { width, fontScale } = useWindowDimensions();
+  const compactConclusion = width < 360 || fontScale > 1.2;
   const params = useLocalSearchParams<{
     id?: string | string[];
   }>();
@@ -95,14 +174,103 @@ export default function HistoryDetailPage() {
     ? params.id[0]
     : params.id;
 
-  // Sementara masih mock. Nanti diganti hasil getScanById(scanId).
-  const result = mockResult;
-
+  const [result, setResult] = useState<ExaminationResult | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [showFullAnalysis, setShowFullAnalysis] = useState(false);
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
+  const [imageState, setImageState] = useState<'none' | 'loading' | 'ready' | 'error'>('none');
 
-  async function createResultPdf() {
-    const html = buildResultHtml(result, scanId ?? '-');
+  useEffect(() => {
+    let isActive = true;
+
+    async function fetchScan() {
+      setResult(null);
+      setError(null);
+      setShowFullAnalysis(false);
+      setImageState('none');
+
+      if (!scanId) {
+        setLoading(false);
+        setError('ID pemeriksaan tidak tersedia.');
+        return;
+      }
+
+      setLoading(true);
+
+      try {
+        const response = await getScanById(scanId);
+
+        if (!isActive) {
+          return;
+        }
+
+        if (response.error) {
+          setError(getErrorMessage(response.error));
+          setLoading(false);
+          return;
+        }
+
+        if (!response.scan) {
+          setError(
+            'Pemeriksaan tidak ditemukan atau Anda tidak memiliki akses.',
+          );
+          setLoading(false);
+          return;
+        }
+
+        // Hasil teks/PDF tetap tersedia saat penandatanganan atau unduhan gambar lambat.
+        setResult(mapScanToExaminationResult(response.scan, null));
+        setLoading(false);
+        if (!response.scan.image_url?.trim()) return;
+
+        setImageState('loading');
+
+        try {
+          const imageResponse = await getScanImageUrl(
+            response.scan.image_url,
+          );
+
+          if (!isActive) return;
+
+          if (imageResponse.error || !imageResponse.imageUrl) {
+            setImageState('error');
+            console.warn(
+              'Gagal mengambil gambar scan:',
+              imageResponse.error?.message ?? 'URL gambar tidak tersedia.',
+            );
+          } else {
+            setResult(mapScanToExaminationResult(response.scan, imageResponse.imageUrl));
+          }
+        } catch (imageError) {
+          if (!isActive) return;
+          setImageState('error');
+          console.warn(
+            'Gagal mengambil gambar scan:',
+            getErrorMessage(imageError),
+          );
+        }
+
+      } catch (fetchError) {
+        if (isActive) {
+          setError(getErrorMessage(fetchError));
+          setLoading(false);
+        }
+      }
+    }
+
+    void fetchScan();
+
+    return () => {
+      isActive = false;
+    };
+  }, [scanId]);
+
+  async function createResultPdf(
+    examinationResult: ExaminationResult,
+    resultScanId: string,
+  ) {
+    const html = buildResultHtml(examinationResult, resultScanId);
 
     const { uri } = await Print.printToFileAsync({
       html,
@@ -112,10 +280,18 @@ export default function HistoryDetailPage() {
   }
 
   async function handleDownload() {
+    if (!result || !scanId) {
+      Alert.alert(
+        'Hasil belum tersedia',
+        'Tunggu hingga hasil pemeriksaan selesai dimuat.',
+      );
+      return;
+    }
+
     try {
       setBusyAction('download');
 
-      const pdfUri = await createResultPdf();
+      const pdfUri = await createResultPdf(result, scanId);
       const sharingAvailable = await Sharing.isAvailableAsync();
 
       if (!sharingAvailable) {
@@ -144,6 +320,14 @@ export default function HistoryDetailPage() {
   }
 
   async function handleSendEmail() {
+    if (!result || !scanId) {
+      Alert.alert(
+        'Hasil belum tersedia',
+        'Tunggu hingga hasil pemeriksaan selesai dimuat.',
+      );
+      return;
+    }
+
     try {
       setBusyAction('email');
 
@@ -175,11 +359,11 @@ export default function HistoryDetailPage() {
         return;
       }
 
-      const pdfUri = await createResultPdf();
+      const pdfUri = await createResultPdf(result, scanId);
 
       await MailComposer.composeAsync({
         recipients: [user.email],
-        subject: `Hasil Pemeriksaan MelanoSense ${scanId ?? ''}`,
+        subject: `Hasil Pemeriksaan MelanoSense ${scanId}`,
         body:
           'Berikut terlampir hasil pemeriksaan MelanoSense Anda. ' +
           'Hasil ini merupakan analisis awal dan bukan pengganti diagnosis tenaga medis.',
@@ -220,155 +404,229 @@ export default function HistoryDetailPage() {
         </Pressable>
       </View>
 
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.content}
-      >
-        <Text style={styles.sectionTitle}>Analisis ABCD</Text>
-
-        <AnalysisCard
-          title="Asymmetry"
-          status={result.analysis.asymmetry.status}
-          description={result.analysis.asymmetry.description}
-        />
-
-        <AnalysisCard
-          title="Border"
-          status={result.analysis.border.status}
-          description={result.analysis.border.description}
-        />
-
-        {showFullAnalysis && (
-          <>
-            <AnalysisCard
-              title="Color"
-              status={result.analysis.color.status}
-              description={result.analysis.color.description}
-            />
-
-            <AnalysisCard
-              title="Diameter"
-              status={result.analysis.diameter.status}
-              description={result.analysis.diameter.description}
-            />
-
-            <ConclusionSection
-              conclusion={result.conclusion}
-            />
-          </>
-        )}
-
-        <Pressable
-          style={({ pressed }) => [
-            styles.toggleButton,
-            pressed && styles.pressed,
-          ]}
-          onPress={() =>
-            setShowFullAnalysis((previousValue) => !previousValue)
-          }
-        >
-          <Text style={styles.toggleText}>
-            {showFullAnalysis
-              ? 'Tampilkan Lebih Sedikit'
-              : 'Tampilkan Analisis Lengkap'}
-          </Text>
-
-          {showFullAnalysis ? (
-            <ChevronUp
-              size={30}
-              color="#007787"
-              strokeWidth={3}
-            />
-          ) : (
-            <ChevronDown
-              size={30}
-              color="#007787"
-              strokeWidth={3}
-            />
-          )}
-        </Pressable>
-
-        <View style={styles.actionContainer}>
-          <ActionButton
-            label={
-              busyAction === 'download'
-                ? 'Menyiapkan PDF...'
-                : 'Unduh Hasil'
-            }
-            icon={
-              busyAction === 'download' ? (
-                <ActivityIndicator
-                  size="small"
-                  color="#FFFFFF"
-                />
-              ) : (
-                <Download
-                  size={21}
-                  color="#FFFFFF"
-                  strokeWidth={2.5}
-                />
-              )
-            }
-            disabled={busyAction !== null}
-            onPress={handleDownload}
-          />
-
-          <ActionButton
-            label={
-              busyAction === 'email'
-                ? 'Menyiapkan Email...'
-                : 'Kirim Email'
-            }
-            icon={
-              busyAction === 'email' ? (
-                <ActivityIndicator
-                  size="small"
-                  color="#FFFFFF"
-                />
-              ) : (
-                <Mail
-                  size={21}
-                  color="#FFFFFF"
-                  strokeWidth={2.5}
-                />
-              )
-            }
-            disabled={busyAction !== null}
-            onPress={handleSendEmail}
-          />
+      {loading ? (
+        <View style={styles.stateContainer}>
+          <ActivityIndicator size="large" color="#007787" />
+          <Text style={styles.stateText}>Memuat hasil pemeriksaan...</Text>
         </View>
-      </ScrollView>
+      ) : error || !result ? (
+        <View style={styles.stateContainer}>
+          <Text style={styles.errorText}>
+            {error || 'Hasil pemeriksaan tidak ditemukan.'}
+          </Text>
+          <Pressable
+            style={({ pressed }) => [
+              styles.stateBackButton,
+              pressed && styles.pressed,
+            ]}
+            onPress={() => router.back()}
+          >
+            <Text style={styles.stateBackButtonText}>Kembali</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.content}
+        >
+          {imageState !== 'none' && (
+            <View style={styles.scanImageContainer}>
+              {result.imageUrl && imageState !== 'error' && (
+                <Image
+                  key={result.imageUrl}
+                  source={{ uri: result.imageUrl }}
+                  style={styles.scanImage}
+                  contentFit="cover"
+                  transition={200}
+                  onLoad={() => setImageState('ready')}
+                  onError={() => {
+                    setImageState('error');
+                    console.warn('Gambar scan gagal dimuat.');
+                  }}
+                  accessibilityLabel="Foto lesi hasil pemeriksaan"
+                />
+              )}
+              {imageState === 'loading' && (
+                <View style={styles.imagePlaceholder}>
+                  <ActivityIndicator color="#007787" />
+                  <Text style={styles.stateText}>Memuat gambar...</Text>
+                </View>
+              )}
+              {imageState === 'error' && (
+                <View style={styles.imagePlaceholder}>
+                  <Text style={styles.stateText}>Gambar tidak tersedia.</Text>
+                </View>
+              )}
+            </View>
+          )}
+
+          <Text style={styles.sectionTitle}>Analisis ABCD</Text>
+
+          <AnalysisCard
+            title="Asymmetry"
+            status={result.analysis.asymmetry.status}
+            description={result.analysis.asymmetry.description}
+          />
+
+          <AnalysisCard
+            title="Border"
+            status={result.analysis.border.status}
+            description={result.analysis.border.description}
+          />
+
+          {showFullAnalysis && (
+            <>
+              <AnalysisCard
+                title="Color"
+                status={result.analysis.color.status}
+                description={result.analysis.color.description}
+              />
+
+              <AnalysisCard
+                title="Diameter"
+                status={result.analysis.diameter.status}
+                description={result.analysis.diameter.description}
+              />
+
+              <ConclusionSection conclusion={result.conclusion} compact={compactConclusion} />
+            </>
+          )}
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.toggleButton,
+              pressed && styles.pressed,
+            ]}
+            onPress={() =>
+              setShowFullAnalysis((previousValue) => !previousValue)
+            }
+          >
+            <Text style={styles.toggleText}>
+              {showFullAnalysis
+                ? 'Tampilkan Lebih Sedikit'
+                : 'Tampilkan Analisis Lengkap'}
+            </Text>
+
+            {showFullAnalysis ? (
+              <ChevronUp
+                size={30}
+                color="#007787"
+                strokeWidth={3}
+              />
+            ) : (
+              <ChevronDown
+                size={30}
+                color="#007787"
+                strokeWidth={3}
+              />
+            )}
+          </Pressable>
+
+          <View style={styles.actionContainer}>
+            <ActionButton
+              label={
+                busyAction === 'download'
+                  ? 'Menyiapkan PDF...'
+                  : 'Unduh Hasil'
+              }
+              icon={
+                busyAction === 'download' ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Download
+                    size={21}
+                    color="#FFFFFF"
+                    strokeWidth={2.5}
+                  />
+                )
+              }
+              disabled={busyAction !== null || !result}
+              onPress={handleDownload}
+            />
+
+            <ActionButton
+              label={
+                busyAction === 'email'
+                  ? 'Menyiapkan Email...'
+                  : 'Kirim Email'
+              }
+              icon={
+                busyAction === 'email' ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Mail
+                    size={21}
+                    color="#FFFFFF"
+                    strokeWidth={2.5}
+                  />
+                )
+              }
+              disabled={busyAction !== null || !result}
+              onPress={handleSendEmail}
+            />
+          </View>
+        </ScrollView>
+      )}
     </SafeAreaView>
   );
 }
 
 type ConclusionSectionProps = {
   conclusion: ExaminationResult['conclusion'];
+  compact: boolean;
 };
 
 function ConclusionSection({
   conclusion,
+  compact,
 }: ConclusionSectionProps) {
+  const diagnosisVisual = getDiagnosisVisual(
+    conclusion.label,
+    conclusion.severity,
+  );
+  const DiagnosisIcon =
+    diagnosisVisual.tone === 'safe'
+      ? CircleCheck
+      : diagnosisVisual.tone === 'danger'
+        ? CircleAlert
+        : CircleHelp;
+  const confidenceText = formatConfidence(conclusion.confidence);
+
   return (
     <View style={styles.conclusionSection}>
       <Text style={styles.sectionTitle}>Kesimpulan</Text>
 
-      <View style={styles.conclusionRow}>
-        <View style={styles.warningCircle}>
-          <CircleAlert
+      <View style={[styles.conclusionRow, compact && styles.compactRow]}>
+        <View
+          style={[
+            styles.diagnosisCircle,
+            { borderColor: diagnosisVisual.accentColor },
+          ]}
+        >
+          <DiagnosisIcon
             size={52}
-            color="#FF5050"
+            color={diagnosisVisual.accentColor}
             strokeWidth={2.5}
           />
         </View>
 
-        <View style={styles.conclusionContent}>
-          <Text style={styles.conclusionTitle}>
-            {conclusion.label}
+        <View style={[styles.conclusionContent, compact && styles.compactContent]}>
+          <Text
+            style={[
+              styles.conclusionTitle,
+              { color: diagnosisVisual.accentColor },
+            ]}
+          >
+            {diagnosisVisual.title}
           </Text>
 
-          <Text style={styles.conclusionSeverity}>
-            {conclusion.severity}
+          <Text
+            style={[
+              styles.diagnosisSubtitle,
+              { color: diagnosisVisual.accentColor },
+            ]}
+          >
+            {diagnosisVisual.subtitle}
           </Text>
 
           <Text style={styles.conclusionDescription}>
@@ -377,21 +635,25 @@ function ConclusionSection({
         </View>
       </View>
 
-      <View style={styles.conclusionRow}>
+      <View style={[styles.conclusionRow, compact && styles.compactRow]}>
         <View style={styles.confidenceCircle}>
-          <Text style={styles.confidenceValue}>
-            {conclusion.confidence}%
+          <Text style={[
+            styles.confidenceValue,
+            confidenceText === DATA_NOT_AVAILABLE && styles.confidenceUnavailable,
+          ]}>
+            {confidenceText}
           </Text>
         </View>
 
-        <View style={styles.conclusionContent}>
+        <View style={[styles.conclusionContent, compact && styles.compactContent]}>
           <Text style={styles.conclusionTitle}>
             {conclusion.stage}
           </Text>
 
           <Text style={styles.conclusionDescription}>
-            Tingkat keyakinan sistem terhadap hasil analisis
-            adalah {conclusion.confidence}%.
+            {confidenceText === DATA_NOT_AVAILABLE
+              ? DATA_NOT_AVAILABLE
+              : `Tingkat keyakinan sistem terhadap hasil analisis adalah ${confidenceText}.`}
           </Text>
         </View>
       </View>
@@ -518,12 +780,12 @@ function buildResultHtml(
 
           <p>
             <strong>Indikasi:</strong>
-            ${escapeHtml(conclusion.label)}
+            ${escapeHtml(formatDiagnosis(conclusion.label))}
           </p>
 
           <p>
-            <strong>Tingkat keparahan:</strong>
-            ${escapeHtml(conclusion.severity)}
+            <strong>Status pemeriksaan:</strong>
+            ${escapeHtml(formatStatus(conclusion.severity))}
           </p>
 
           <p>
@@ -533,7 +795,7 @@ function buildResultHtml(
 
           <p>
             <strong>Tingkat keyakinan:</strong>
-            ${conclusion.confidence}%
+            ${escapeHtml(formatConfidence(conclusion.confidence))}
           </p>
 
           <p>
@@ -609,10 +871,43 @@ const styles = StyleSheet.create({
     color: '#007787',
   },
 
+  stateContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+  },
+
+  stateText: {
+    marginTop: 14,
+    textAlign: 'center',
+    fontFamily: 'Poppins-Regular',
+    color: '#667085',
+  },
+
+  errorText: {
+    textAlign: 'center',
+    fontFamily: 'Poppins-Regular',
+    color: '#B42318',
+  },
+
+  stateBackButton: {
+    marginTop: 18,
+    borderRadius: 6,
+    backgroundColor: '#008896',
+    paddingHorizontal: 22,
+    paddingVertical: 11,
+  },
+
+  stateBackButtonText: {
+    fontFamily: 'Poppins-SemiBold',
+    color: '#FFFFFF',
+  },
+
   content: {
     paddingHorizontal: 24,
     paddingTop: 28,
-    paddingBottom: 60,
+    paddingBottom: 24,
     backgroundColor: '#FFFFFF',
   },
 
@@ -621,6 +916,31 @@ const styles = StyleSheet.create({
     fontFamily: 'Poppins-SemiBold',
     color: '#171717',
     marginBottom: 22,
+  },
+
+  scanImageContainer: {
+    width: '100%',
+    height: 240,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#F2F4F7',
+    marginBottom: 28,
+  },
+
+  scanImage: {
+    width: '100%',
+    height: '100%',
+  },
+
+  imagePlaceholder: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
   },
 
   conclusionSection: {
@@ -634,19 +954,20 @@ const styles = StyleSheet.create({
     marginBottom: 30,
   },
 
-  warningCircle: {
+  diagnosisCircle: {
     width: 96,
     height: 96,
     borderRadius: 48,
     borderWidth: 9,
-    borderColor: '#FF5050',
     justifyContent: 'center',
     alignItems: 'center',
   },
 
   confidenceCircle: {
-    width: 96,
-    height: 96,
+    minWidth: 96,
+    minHeight: 96,
+    maxWidth: '100%',
+    padding: 8,
     borderRadius: 48,
     borderWidth: 9,
     borderColor: '#FFA17A',
@@ -660,9 +981,20 @@ const styles = StyleSheet.create({
     color: '#FF8F67',
   },
 
+  confidenceUnavailable: {
+    fontSize: 10,
+    lineHeight: 14,
+    textAlign: 'center',
+    paddingHorizontal: 4,
+    color: '#667085',
+  },
+
   conclusionContent: {
     flex: 1,
+    minWidth: 0,
   },
+  compactRow: { flexDirection: 'column', alignItems: 'flex-start', gap: 12 },
+  compactContent: { flex: 0, width: '100%' },
 
   conclusionTitle: {
     fontSize: 20,
@@ -671,10 +1003,9 @@ const styles = StyleSheet.create({
     marginBottom: 5,
   },
 
-  conclusionSeverity: {
+  diagnosisSubtitle: {
     fontSize: 12,
     fontFamily: 'Poppins-SemiBold',
-    color: '#D92D20',
     marginBottom: 5,
   },
 
@@ -693,6 +1024,7 @@ const styles = StyleSheet.create({
   },
 
   toggleText: {
+    textAlign: 'center',
     fontSize: 14,
     fontFamily: 'Poppins-Medium',
     color: '#00899A',
@@ -712,9 +1044,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 14,
     paddingHorizontal: 20,
+    paddingVertical: 12,
   },
 
   actionButtonText: {
+    flexShrink: 1,
+    textAlign: 'center',
     fontSize: 14,
     fontFamily: 'Poppins-SemiBold',
     color: '#FFFFFF',

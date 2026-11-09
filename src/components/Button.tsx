@@ -66,7 +66,9 @@ export default Button;
 
 const styles = StyleSheet.create({
   button: {
-    height: 45,
+    minHeight: 48,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     borderRadius: 26,
     justifyContent: 'center',
     alignItems: 'center',
@@ -75,5 +77,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: 'Manrope-Bold',
     color: '#05051F',
+    textAlign: 'center',
+    flexShrink: 1,
   },
 });

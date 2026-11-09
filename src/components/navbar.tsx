@@ -1,6 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, usePathname } from 'expo-router';
 import { ScanLine, CircleUserRound, BookOpen, History } from 'lucide-react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const navItems = [
   {
@@ -29,7 +30,7 @@ export default function BottomNavbar() {
   const pathname = usePathname();
 
   return (
-    <View style={styles.wrapper}>
+    <SafeAreaView style={styles.wrapper} edges={['bottom', 'left', 'right']}>
       <View style={styles.navbar}>
         {navItems.map((item) => {
           const isActive = pathname === item.route;
@@ -39,7 +40,13 @@ export default function BottomNavbar() {
             <Pressable
               key={item.route}
               style={styles.navItem}
-              onPress={() => router.push(item.route)}
+              accessibilityRole="tab"
+              accessibilityLabel={item.label}
+              accessibilityState={{ selected: isActive }}
+              onPress={() => {
+                // Reuse a route below detail/edit screens; replace if it is absent.
+                if (!isActive) router.dismissTo(item.route);
+              }}
             >
               <Icon
                 size={24}
@@ -54,22 +61,19 @@ export default function BottomNavbar() {
           );
         })}
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   wrapper: {
-    position: 'absolute',
-    left: 12,
-    right: 12,
-    bottom: 0,
-    zIndex: 999,
-    elevation: 999,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
   },
 
   navbar: {
-    height: 82,
+    minHeight: 72,
+    paddingVertical: 10,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     backgroundColor: '#FFFFFF',
@@ -82,19 +86,24 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: -2 },
     shadowOpacity: 0.12,
     shadowRadius: 12,
-    elevation: 12,
+    elevation: 4,
   },
 
   navItem: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 4,
   },
 
   label: {
+    maxWidth: '100%',
     fontSize: 11,
     fontFamily: 'Poppins-Medium',
     color: '#B8B8B8',
+    textAlign: 'center',
   },
 
   activeLabel: {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   View,
   Text,
@@ -6,14 +6,15 @@ import {
   Pressable,
   StyleSheet,
   Image,
-  Touchable,
-  TouchableOpacity
+  TouchableOpacity,
 } from 'react-native';
 import Button from '@/components/Button';
+import FormScreen from '../components/FormScreen';
 import { router } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/contexts/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
+import { getSafeErrorMessage } from '../utils/userFacingErrors';
+import { SHOW_SOCIAL_AUTH } from '@/constants/auth';
 
 function isValidEmail(value: string) {
   return /\S+@\S+\.\S+/.test(value);
@@ -53,9 +54,11 @@ const LoginPage = () => {
     } catch (error) {
       setMessage('');
       setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : 'Login gagal. Periksa email dan password Anda.'
+        getSafeErrorMessage(
+          error,
+          'Login gagal. Periksa email dan password Anda.',
+          'auth',
+        )
       );
     } finally {
       setLoading(false);
@@ -79,9 +82,11 @@ const LoginPage = () => {
     } catch (error) {
       setMessage('');
       setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : 'Login sosial gagal. Silakan coba lagi.'
+        getSafeErrorMessage(
+          error,
+          'Login sosial gagal. Silakan coba lagi.',
+          'auth',
+        )
       );
     } finally {
       setLoading(false);
@@ -89,8 +94,7 @@ const LoginPage = () => {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
+    <FormScreen contentContainerStyle={styles.container}>
         {/* Header */}
         <View style={styles.header}>
           <Text style={styles.title}>Log In</Text>
@@ -144,17 +148,6 @@ const LoginPage = () => {
             </TouchableOpacity>
           </View>
 
-          <View style={styles.optionRow}>
-            <Pressable style={styles.rememberRow}>
-              <View style={styles.checkbox} />
-              <Text style={styles.rememberText}>Ingat Saya</Text>
-            </Pressable>
-
-            <Pressable>
-              <Text style={styles.forgotText}>Lupa Password?</Text>
-            </Pressable>
-          </View>
-
           <View style={styles.primaryButton}>
             <Button
               title={loading ? 'Memproses...' : 'Sign In'}
@@ -164,25 +157,28 @@ const LoginPage = () => {
             />
           </View>
 
-          <View style={styles.primaryButton}>
-            <Button
-              title="Sign In dengan Google"
-              variant="white"
-              outline
-              onPress={() => handleOAuthLogin('google')}
-              disabled={loading}
-            />
-          </View>
-
-          <View style={styles.primaryButton}>
-            <Button
-              title="Sign In dengan Apple"
-              variant="white"
-              outline
-              onPress={() => handleOAuthLogin('apple')}
-              disabled={loading}
-            />
-          </View>
+          {SHOW_SOCIAL_AUTH && (
+            <>
+              <View style={styles.primaryButton}>
+                <Button
+                  title="Sign In dengan Google"
+                  variant="white"
+                  outline
+                  onPress={() => handleOAuthLogin('google')}
+                  disabled={loading}
+                />
+              </View>
+              <View style={styles.primaryButton}>
+                <Button
+                  title="Sign In dengan Apple"
+                  variant="white"
+                  outline
+                  onPress={() => handleOAuthLogin('apple')}
+                  disabled={loading}
+                />
+              </View>
+            </>
+          )}
 
           {message ? <Text style={styles.statusText}>{message}</Text> : null}
           {errorMessage ? (
@@ -193,27 +189,19 @@ const LoginPage = () => {
         {/* Footer */}
         <View style={styles.footer}>
           <Text style={styles.footerText}>Belum memiliki akun?</Text>
-          <Pressable onPress={() => router.push('./register')}>
+          <Pressable onPress={() => router.replace('/register')}>
             <Text style={styles.footerLink}> Sign Up</Text>
           </Pressable>
         </View>
-      </View>
-    </SafeAreaView>
+    </FormScreen>
   );
 };
 
 export default LoginPage;
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
-
   container: {
-    flex: 1,
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 42,
     justifyContent: 'center',
   },
   
@@ -223,13 +211,16 @@ const styles = StyleSheet.create({
 
   header: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'center',
     alignItems: 'center',
     gap: 14,
-    marginBottom: 38,
+    marginBottom: 24,
   },
 
   title: {
+    flexShrink: 1,
+    textAlign: 'center',
     fontSize: 30,
     color: '#05051F',
     fontFamily: 'Poppins-SemiBold',
@@ -257,19 +248,20 @@ const styles = StyleSheet.create({
   },
 
   input: {
-    height: 36, 
+    minHeight: 48,
     borderWidth: 1,
     borderColor: '#CFCFCF',
     borderRadius: 6,
     paddingHorizontal: 12,
-    fontSize: 11,
+    fontSize: 14,
+    paddingVertical: 12,
     fontFamily: 'Manrope-Regular',
     color: '#101010',
     marginBottom: 18,
   },
 
   passwordContainer: {
-    height: 36,
+    minHeight: 48,
     borderWidth: 1,
     borderColor: "#CFCFCF",
     borderRadius: 6,
@@ -280,53 +272,21 @@ const styles = StyleSheet.create({
 
   passwordInput: {
     flex: 1,
-    height: "100%",
+    minWidth: 0,
+    minHeight: 48,
+    paddingVertical: 12,
     paddingLeft: 12,
     paddingRight: 4,
-    fontSize: 11,
+    fontSize: 14,
     fontFamily: "Manrope-Regular",
     color: "#101010",
   },
 
   eyeButton: {
-    height: "100%",
-    width: 42,
+    minHeight: 48,
+    width: 48,
     justifyContent: "center",
     alignItems: "center",
-  },
-
-  optionRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 6,
-    marginBottom: 28,
-  },
-
-  rememberRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-
-  checkbox: {
-    width: 18,
-    height: 18,
-    borderRadius: 5,
-    borderWidth: 1,
-    borderColor: '#D0D0D0',
-    marginRight: 8,
-  },
-
-  rememberText: {
-    fontSize: 12,
-    fontFamily: 'Manrope-Bold',
-    color: '#B2B2B2',
-  },
-
-  forgotText: {
-    fontSize: 12,
-    fontFamily: 'Manrope-Bold',
-    color: '#05051F',
   },
 
   primaryButton: {
@@ -383,6 +343,7 @@ const styles = StyleSheet.create({
 
   footer: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'center',
     marginTop: 20,
   },

@@ -1,22 +1,29 @@
 import {
   ActivityIndicator,
   Alert,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
-import { 
+import {
   getCurrentUserProfile, 
   updateCurrentUserProfile, 
 } from '../services/profileServices';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { UserRound } from 'lucide-react-native';
 import { Picker } from '@react-native-picker/picker';
 import Button from '../components/Button';
+import FormScreen from '../components/FormScreen';
+import BirthDateField from '../components/BirthDateField';
+import { isAllowedBirthDate } from '../utils/birthDate';
+import {
+  isValidPhone,
+  normalizePhone,
+} from '../utils/profileValidation';
+import { getSafeErrorMessage } from '../utils/userFacingErrors';
 
 type GenderValue = 'male' | 'female' | '';
 
@@ -26,44 +33,83 @@ export default function EditProfilePage() {
   const [phone, setPhone] = useState('');
   const [gender, setGender] = useState<GenderValue>('');
 
-  const [isLoading, setIsLoading] = useState(true);
+  const [loadState, setLoadState] = useState<'LOADING' | 'SUCCESS' | 'ERROR'>('LOADING');
   const [isSaving, setIsSaving] = useState(false);
+  const savingRef = useRef(false);
+  const loadInFlightRef = useRef<Promise<void> | null>(null);
+  const loadRequestRef = useRef(0);
+  const mountedRef = useRef(false);
 
-  useEffect(() => {
-    fetchProfile();
+  const fetchProfile = useCallback(async () => {
+    if (loadInFlightRef.current) {
+      return loadInFlightRef.current;
+    }
+
+    const requestId = ++loadRequestRef.current;
+    const request = (async () => {
+      try {
+        const { profile, error } = await getCurrentUserProfile();
+
+        if (!mountedRef.current || requestId !== loadRequestRef.current) {
+          return;
+        }
+
+        if (error || !profile) {
+          setLoadState('ERROR');
+          return;
+        }
+
+        setName(profile.full_name ?? '');
+        setBirthDate(profile.birth_date ?? '');
+        setPhone(profile.phone ?? '');
+
+        if (profile.gender === 'male' || profile.gender === 'female') {
+          setGender(profile.gender);
+        } else {
+          setGender('');
+        }
+
+        setLoadState('SUCCESS');
+      } catch {
+        if (mountedRef.current && requestId === loadRequestRef.current) {
+          setLoadState('ERROR');
+        }
+      }
+    })();
+
+    loadInFlightRef.current = request;
+
+    try {
+      await request;
+    } finally {
+      if (loadInFlightRef.current === request) {
+        loadInFlightRef.current = null;
+      }
+    }
   }, []);
 
-  async function fetchProfile() {
-    setIsLoading(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    const loadTimer = setTimeout(() => {
+      void fetchProfile();
+    }, 0);
 
-    const { profile, error } = await getCurrentUserProfile();
+    return () => {
+      mountedRef.current = false;
+      clearTimeout(loadTimer);
+    };
+  }, [fetchProfile]);
 
-    if (error) {
-      Alert.alert('Gagal mengambil profil', error.message);
-      setIsLoading(false);
-      return;
-    }
-
-    if (!profile) {
-      Alert.alert('Profil tidak ditemukan');
-      setIsLoading(false);
-      return;
-    }
-
-    setName(profile.full_name ?? '');
-    setBirthDate(profile.birth_date ?? '');
-    setPhone(profile.phone ?? '');
-
-    if (profile.gender === 'male' || profile.gender === 'female') {
-      setGender(profile.gender);
-    } else {
-      setGender('');
-    }
-
-    setIsLoading(false);
-  }
+  const retryProfile = useCallback(() => {
+    setLoadState('LOADING');
+    void fetchProfile();
+  }, [fetchProfile]);
 
   async function handleSave() {
+    if (savingRef.current) {
+      return;
+    }
+
     if (!name.trim()) {
       Alert.alert('Data belum lengkap', 'Nama wajib diisi.');
       return;
@@ -74,27 +120,49 @@ export default function EditProfilePage() {
       return;
     }
 
-    if (birthDate.trim() && !isValidDateFormat(birthDate.trim())) {
+    if (!isAllowedBirthDate(birthDate)) {
       Alert.alert(
-        'Format tanggal salah',
-        'Gunakan format tanggal YYYY-MM-DD, contohnya 2006-02-22.'
+        'Tanggal lahir tidak valid',
+        'Pilih tanggal lahir yang benar dan tidak di masa depan.'
       );
       return;
     }
 
+    if (!isValidPhone(phone)) {
+      Alert.alert(
+        'Nomor telepon tidak valid',
+        'Nomor telepon wajib diisi dengan angka yang valid.',
+      );
+      return;
+    }
+
+    savingRef.current = true;
     setIsSaving(true);
 
-    const { error } = await updateCurrentUserProfile({
-      full_name: name.trim(),
-      gender,
-      birth_date: birthDate.trim() || undefined,
-      phone: phone.trim() || undefined,
-    });
+    let error: unknown = null;
 
-    setIsSaving(false);
+    try {
+      ({ error } = await updateCurrentUserProfile({
+        full_name: name.trim(),
+        gender,
+        birth_date: birthDate.trim(),
+        phone: normalizePhone(phone),
+      }));
+    } catch (saveError) {
+      error = saveError;
+    } finally {
+      savingRef.current = false;
+      setIsSaving(false);
+    }
 
     if (error) {
-      Alert.alert('Gagal menyimpan profil', error.message);
+      Alert.alert(
+        'Gagal menyimpan profil',
+        getSafeErrorMessage(
+          error,
+          'Profil belum dapat disimpan. Silakan coba lagi.',
+        ),
+      );
       return;
     }
 
@@ -106,9 +174,9 @@ export default function EditProfilePage() {
     ]);
   }
 
-  if (isLoading) {
+  if (loadState === 'LOADING') {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#007787" />
           <Text style={styles.loadingText}>Memuat profil...</Text>
@@ -117,12 +185,22 @@ export default function EditProfilePage() {
     );
   }
 
+  if (loadState === 'ERROR') {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorTitle}>Profil belum dapat dimuat</Text>
+          <Text style={styles.errorText}>
+            Periksa koneksi internet Anda, lalu coba lagi.
+          </Text>
+          <Button title="Coba Lagi" variant="cyan" onPress={retryProfile} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={styles.container}
-      >
+    <FormScreen includeBottomInset={false} contentContainerStyle={styles.container}>
         <View style={styles.header}>
           <View style={styles.avatar}>
             <UserRound size={24} color="#FFFFFF" strokeWidth={2.2} />
@@ -172,13 +250,10 @@ export default function EditProfilePage() {
             </View>
           </View>
 
-          <Input
-            label="Tanggal Lahir"
+          <BirthDateField
             value={birthDate}
-            onChangeText={setBirthDate}
-            placeholder="YYYY-MM-DD"
-            keyboardType="number-pad"
-            autoCapitalize="none"
+            onChange={setBirthDate}
+            disabled={isSaving}
           />
 
           <Input
@@ -208,8 +283,7 @@ export default function EditProfilePage() {
           onPress={() => router.back()}
           disabled={isSaving}
         />
-      </ScrollView>
-    </SafeAreaView>
+    </FormScreen>
   );
 }
 
@@ -247,18 +321,6 @@ function Input({
   );
 }
 
-function isValidDateFormat(value: string) {
-  const datePattern = /^\d{4}-\d{2}-\d{2}$/;
-
-  if (!datePattern.test(value)) {
-    return false;
-  }
-
-  const parsedDate = new Date(`${value}T00:00:00`);
-
-  return !Number.isNaN(parsedDate.getTime());
-}
-
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
@@ -278,11 +340,36 @@ const styles = StyleSheet.create({
     color: '#777777',
   },
 
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+    backgroundColor: '#FFFFFF',
+  },
+
+  errorTitle: {
+    color: '#2A2A2A',
+    fontFamily: 'Poppins-SemiBold',
+    fontSize: 17,
+    textAlign: 'center',
+  },
+
+  errorText: {
+    marginTop: 10,
+    marginBottom: 20,
+    color: '#667085',
+    fontFamily: 'Poppins-Regular',
+    fontSize: 13,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+
   container: {
     flexGrow: 1,
     paddingHorizontal: 24,
-    paddingTop: 54,
-    paddingBottom: 130,
+    paddingTop: 24,
+    paddingBottom: 24,
     backgroundColor: '#FFFFFF',
   },
 
@@ -303,6 +390,7 @@ const styles = StyleSheet.create({
   },
 
   title: {
+    flex: 1,
     fontSize: 28,
     fontFamily: 'Poppins-SemiBold',
     color: '#2A2A2A',
@@ -327,7 +415,8 @@ const styles = StyleSheet.create({
   },
 
   input: {
-    height: 42,
+    minHeight: 48,
+    paddingVertical: 12,
     borderRadius: 8,
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 12,
@@ -337,7 +426,7 @@ const styles = StyleSheet.create({
   },
 
   pickerContainer: {
-    height: 48,
+    minHeight: 48,
     borderRadius: 8,
     backgroundColor: '#FFFFFF',
     justifyContent: 'center',
@@ -351,12 +440,10 @@ const styles = StyleSheet.create({
   },
 
   saveButton: {
-    height: 48,
     marginTop: 22,
   },
 
   cancelButton: {
-    height: 48,
     marginTop: 10,
   },
 });

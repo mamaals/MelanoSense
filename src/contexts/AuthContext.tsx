@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type PropsWithChildren,
 } from 'react';
@@ -12,6 +13,7 @@ import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
+import { getSafeErrorMessage } from '@/utils/userFacingErrors';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -25,10 +27,19 @@ type SignUpResult = {
   needsEmailConfirmation: boolean;
 };
 
+export type AuthStatus =
+  | 'INITIALIZING'
+  | 'AUTHENTICATED'
+  | 'UNAUTHENTICATED'
+  | 'ERROR';
+
 type AuthContextValue = {
   session: Session | null;
   user: User | null;
   initializing: boolean;
+  authStatus: AuthStatus;
+  initializationError: Error | null;
+  retrySessionInitialization: () => Promise<void>;
   signInWithPassword: (email: string, password: string) => Promise<void>;
   signUpWithPassword: (options: SignUpOptions) => Promise<SignUpResult>;
   signInWithOAuth: (provider: Extract<Provider, 'google' | 'apple'>) => Promise<void>;
@@ -40,7 +51,7 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 function ensureSupabaseConfigured() {
   if (!isSupabaseConfigured) {
     throw new Error(
-      'Supabase belum dikonfigurasi. Isi EXPO_PUBLIC_SUPABASE_URL dan EXPO_PUBLIC_SUPABASE_ANON_KEY di file .env.'
+      'Supabase belum dikonfigurasi. Isi konfigurasi Supabase pada environment aplikasi.',
     );
   }
 }
@@ -59,7 +70,7 @@ function readUrlParam(url: string, key: string) {
   return params.get(key) ?? hashParams.get(key);
 }
 
-async function completeOAuthCallback(url: string) {
+async function processOAuthCallback(url: string) {
   const errorDescription = readUrlParam(url, 'error_description');
   const error = readUrlParam(url, 'error');
 
@@ -77,9 +88,10 @@ async function completeOAuthCallback(url: string) {
       return;
     }
 
-    const { data } = await supabase.auth.getSession();
+    const { data, error: sessionCheckError } =
+      await supabase.auth.getSession();
 
-    if (data.session) {
+    if (!sessionCheckError && data.session) {
       return;
     }
 
@@ -118,34 +130,117 @@ async function completeOAuthCallback(url: string) {
   throw new Error('Callback OAuth tidak berisi kode sesi yang valid.');
 }
 
+const completedOAuthCallbacks = new Set<string>();
+const inFlightOAuthCallbacks = new Map<string, Promise<void>>();
+
+async function completeOAuthCallback(url: string) {
+  if (completedOAuthCallbacks.has(url)) {
+    return;
+  }
+
+  const existingRequest = inFlightOAuthCallbacks.get(url);
+
+  if (existingRequest) {
+    return existingRequest;
+  }
+
+  const request = processOAuthCallback(url);
+  inFlightOAuthCallbacks.set(url, request);
+
+  try {
+    await request;
+    completedOAuthCallbacks.add(url);
+  } finally {
+    inFlightOAuthCallbacks.delete(url);
+  }
+}
+
 export function AuthProvider({ children }: PropsWithChildren) {
   const [session, setSession] = useState<Session | null>(null);
   const [initializing, setInitializing] = useState(true);
+  const [authStatus, setAuthStatus] = useState<AuthStatus>('INITIALIZING');
+  const [initializationError, setInitializationError] = useState<Error | null>(null);
+  const mountedRef = useRef(false);
+  const initializationInFlightRef = useRef<Promise<void> | null>(null);
+  const signOutInFlightRef = useRef<Promise<void> | null>(null);
+
+  const loadSession = useCallback(async () => {
+    if (initializationInFlightRef.current) {
+      return initializationInFlightRef.current;
+    }
+
+    setInitializing(true);
+    setAuthStatus('INITIALIZING');
+    setInitializationError(null);
+
+    const request = (async () => {
+      try {
+        const { data, error } = await supabase.auth.getSession();
+
+        if (error) {
+          throw error;
+        }
+
+        if (!mountedRef.current) {
+          return;
+        }
+
+        setSession(data.session);
+        setAuthStatus(data.session ? 'AUTHENTICATED' : 'UNAUTHENTICATED');
+        setInitializing(false);
+      } catch (error) {
+        if (!mountedRef.current) {
+          return;
+        }
+
+        setInitializationError(
+          new Error(
+            getSafeErrorMessage(
+              error,
+              'Sesi belum dapat dipulihkan. Silakan coba lagi.',
+              'auth',
+            ),
+          ),
+        );
+        setAuthStatus('ERROR');
+        setInitializing(false);
+      }
+    })();
+
+    initializationInFlightRef.current = request;
+
+    try {
+      await request;
+    } finally {
+      if (initializationInFlightRef.current === request) {
+        initializationInFlightRef.current = null;
+      }
+    }
+  }, []);
 
   useEffect(() => {
-    let mounted = true;
-
-    supabase.auth.getSession().then(({ data }) => {
-      if (!mounted) {
-        return;
-      }
-
-      setSession(data.session);
-      setInitializing(false);
-    });
+    mountedRef.current = true;
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!mountedRef.current) {
+        return;
+      }
+
       setSession(nextSession);
+      setInitializationError(null);
+      setAuthStatus(nextSession ? 'AUTHENTICATED' : 'UNAUTHENTICATED');
       setInitializing(false);
     });
 
+    void loadSession();
+
     return () => {
-      mounted = false;
+      mountedRef.current = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [loadSession]);
 
   const signInWithPassword = useCallback(async (email: string, password: string) => {
     ensureSupabaseConfigured();
@@ -209,19 +304,36 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
       await completeOAuthCallback(result.url);
     },
-    []
+    [],
   );
 
   const signOut = useCallback(async () => {
     ensureSupabaseConfigured();
 
-    const { error } = await supabase.auth.signOut();
-
-    if (error) {
-      throw error;
+    if (signOutInFlightRef.current) {
+      return signOutInFlightRef.current;
     }
 
-    setSession(null);
+    const request = (async () => {
+      const { error } = await supabase.auth.signOut();
+
+      if (error) {
+        throw error;
+      }
+
+      setSession(null);
+      setAuthStatus('UNAUTHENTICATED');
+    })();
+
+    signOutInFlightRef.current = request;
+
+    try {
+      await request;
+    } finally {
+      if (signOutInFlightRef.current === request) {
+        signOutInFlightRef.current = null;
+      }
+    }
   }, []);
 
   const value = useMemo<AuthContextValue>(
@@ -229,19 +341,25 @@ export function AuthProvider({ children }: PropsWithChildren) {
       session,
       user: session?.user ?? null,
       initializing,
+      authStatus,
+      initializationError,
+      retrySessionInitialization: loadSession,
       signInWithPassword,
       signUpWithPassword,
       signInWithOAuth,
       signOut,
     }),
     [
+      authStatus,
+      initializationError,
       initializing,
+      loadSession,
       session,
       signInWithOAuth,
       signInWithPassword,
       signOut,
       signUpWithPassword,
-    ]
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
